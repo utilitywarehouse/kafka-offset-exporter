@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/Shopify/sarama"
-	log "github.com/Sirupsen/logrus"
 	"github.com/prometheus/client_golang/prometheus"
+	log "github.com/sirupsen/logrus"
 )
 
 func init() {
@@ -49,10 +49,15 @@ func mustNewScrapeConfig(refresh time.Duration, fetchMin time.Duration, fetchMax
 	}
 }
 
-func startKafkaScraper(wg *sync.WaitGroup, shutdown chan struct{}, kafka sarama.Client, cfg scrapeConfig) {
+func startKafkaScraper(
+	wg *sync.WaitGroup,
+	shutdown chan struct{},
+	kafka sarama.Client,
+	cfg scrapeConfig,
+	version sarama.KafkaVersion) {
 	go refreshMetadataPeriodically(wg, shutdown, kafka, cfg)
 	for _, broker := range kafka.Brokers() {
-		go manageBroker(wg, shutdown, broker, kafka, cfg)
+		go manageBroker(wg, shutdown, broker, kafka, cfg, version)
 	}
 }
 
@@ -79,7 +84,14 @@ func refreshMetadataPeriodically(wg *sync.WaitGroup, shutdown chan struct{}, kaf
 	}
 }
 
-func manageBroker(wg *sync.WaitGroup, shutdown chan struct{}, broker *sarama.Broker, kafka sarama.Client, cfg scrapeConfig) {
+func manageBroker(
+	wg *sync.WaitGroup,
+	shutdown chan struct{},
+	broker *sarama.Broker,
+	kafka sarama.Client,
+	cfg scrapeConfig,
+	version sarama.KafkaVersion) {
+
 	wg.Add(1)
 	defer wg.Done()
 
@@ -95,7 +107,7 @@ func manageBroker(wg *sync.WaitGroup, shutdown chan struct{}, broker *sarama.Bro
 			log.WithField("broker", broker.Addr()).Debug("Updating metrics")
 
 			// ensure broker is connected
-			if err := connect(broker); err != nil {
+			if err := connect(broker, version); err != nil {
 				log.WithField("broker", broker.Addr()).
 					WithField("error", err).
 					Error("Failed to connect to broker")
@@ -237,13 +249,13 @@ func manageBroker(wg *sync.WaitGroup, shutdown chan struct{}, broker *sarama.Bro
 	}
 }
 
-func connect(broker *sarama.Broker) error {
+func connect(broker *sarama.Broker, version sarama.KafkaVersion) error {
 	if ok, _ := broker.Connected(); ok {
 		return nil
 	}
 
 	cfg := sarama.NewConfig()
-	cfg.Version = sarama.V0_10_0_0
+	cfg.Version = version
 	if err := broker.Open(cfg); err != nil {
 		return err
 	}
