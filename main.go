@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/Shopify/sarama"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 )
 
 func main() {
@@ -23,17 +23,23 @@ func main() {
 	fetchMin := flag.Duration("fetchMin", 15*time.Second, "Min time before requesting updates from broker")
 	fetchMax := flag.Duration("fetchMax", 40*time.Second, "Max time before requesting updates from broker")
 	level := flag.String("level", "info", "Logger level")
+	kafkaVersion := flag.String("kafkaVersion", "0.10.0.0", "Kafka version")
 	flag.Parse()
 
 	mustSetupLogger(*level)
 	serverConfig := mustNewServerConfig(*port, *path)
 	scrapeConfig := mustNewScrapeConfig(*refresh, *fetchMin, *fetchMax, *topics, *groups)
 
-	kafka := mustNewKafka(*brokerString)
+	kv, err := sarama.ParseKafkaVersion(*kafkaVersion)
+	if err != nil {
+		log.WithError(err).Panicf("failed to parse kafka version - %s", *kafkaVersion)
+	}
+
+	kafka := mustNewKafka(*brokerString, kv)
 	defer kafka.Close()
 
 	enforceGracefulShutdown(func(wg *sync.WaitGroup, shutdown chan struct{}) {
-		startKafkaScraper(wg, shutdown, kafka, scrapeConfig)
+		startKafkaScraper(wg, shutdown, kafka, scrapeConfig, kv)
 		startMetricsServer(wg, shutdown, serverConfig)
 	})
 }
@@ -55,7 +61,7 @@ func enforceGracefulShutdown(f func(wg *sync.WaitGroup, shutdown chan struct{}))
 	wg.Wait()
 }
 
-func mustNewKafka(brokerString string) sarama.Client {
+func mustNewKafka(brokerString string, version sarama.KafkaVersion) sarama.Client {
 	brokers := strings.Split(brokerString, ",")
 	for i := range brokers {
 		brokers[i] = strings.TrimSpace(brokers[i])
@@ -66,7 +72,7 @@ func mustNewKafka(brokerString string) sarama.Client {
 	log.WithField("brokers.bootstrap", brokers).Info("connecting to cluster with bootstrap hosts")
 
 	cfg := sarama.NewConfig()
-	cfg.Version = sarama.V1_0_0_0
+	cfg.Version = version
 	client, err := sarama.NewClient(brokers, cfg)
 	if err != nil {
 		log.Fatal(err)
